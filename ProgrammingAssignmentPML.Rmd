@@ -1,0 +1,120 @@
+## Quantified Self - Practical Machine Learning Project 
+
+### 1 Executive Summary 
+As part of a "Quantified Self"-project participants were asked to perform barbell lifts in 5 different ways, including both correct and incorrect performances. The goal of this paper is to show how a model can be build that predicts the manner in which the participants completed the exercise, using different collected variables as predictors.
+
+The result is that a Random Forrest predicts the way participants completed the exercise very well, with an out-of-sample error of less than 1%.
+
+### 2 Data Loading and Creation of Training, Test and Validation Sets
+The data and necessary package are loaded.
+
+```{r warning=FALSE, message=FALSE}
+library(caret)
+
+training <- read.csv("pml-training.csv",header=TRUE,
+                     na.strings=c("NA","#DIV/0!",""),
+                     stringsAsFactors=FALSE)
+final.testing <- read.csv("pml-testing.csv",header=TRUE,
+                          na.strings=c("NA","#DIV/0!",""),
+                          stringsAsFactors=FALSE)
+```
+
+As the twenty rows of the testing data set will be used for the final test only, this data set can not be used for training, testing and validation purposes. Therefore the testing data set is split in a train, test and validation data set according to a 60-20-20 ratio.
+
+```{r, warning=FALSE, message=FALSE}
+inBuild <- createDataPartition(y=training$classe,p=0.8,list=FALSE)
+validationData <- training[-inBuild,]
+buildData <- training[inBuild,]
+
+inTrain <- createDataPartition(y=buildData$classe,p=0.75,
+                               list=FALSE)
+trainData <- buildData[inTrain,]
+testData <- buildData[-inTrain,]
+
+dim(trainData)
+dim(testData)
+dim(validationData)
+```
+
+### 3 Data Preprocessing and Feature Selection
+The data is preprocessed and features to be included in the model are selected, based on the training data set. The following steps are conducted:
+
+1. Classification variables that do not contribute to the measurements are excluded
+2. Variables with missing values are excluded
+3. Variables with near zero variance are excluded
+
+No standardization is done because the scale of the features does not influence the specific models that will be used.
+
+```{r, warning=FALSE, message=FALSE}
+trainData2 <- subset(trainData,
+                     select=-c(X,user_name,raw_timestamp_part_1,
+                               raw_timestamp_part_2,cvtd_timestamp,
+                               new_window,num_window))
+
+na <- apply(trainData2, 2, function(x) mean(is.na(x)))
+trainData3 <- trainData2[,na==0]
+
+nzv <- nearZeroVar(trainData3,saveMetrics=TRUE)
+trainDataDef <- trainData3[,nzv$nzv==FALSE]
+```
+
+Now the same preprocessing and feature selection are applied to the test and validation sets
+```{r, warning=FALSE, message=FALSE}
+colDef <- names(trainDataDef)
+testDataDef <- subset(testData,select=colDef)
+validationDataDef <- subset(validationData,select=colDef)
+```
+
+### 4 Building the Models with Cross Validation
+Three models are selected for a trial:
+
+1. Random Forest: trained using 3-fold Cross Validation on the training set 
+2. Trees with Boosting: trained using 3-fold Cross Validation on the training set
+3. Stacking with Random Forests: the predictions from the previous two models on the testing set are used to stack those two models.
+
+```{r cache=TRUE, warning=FALSE, message=FALSE}
+set.seed(4321)
+
+fit.RF <- train(classe ~ . , data=trainDataDef, method="rf",
+                allowParallel=TRUE,
+                trControl=trainControl(method="cv",number=3))
+pred.RF <- predict(fit.RF,newdata=testDataDef)
+
+fit.BT <- train(classe ~ . , data=trainDataDef, method="gbm",
+                verbose=FALSE,
+                trControl=trainControl(method="cv",number=3))
+pred.BT <- predict(fit.BT,newdata=testDataDef)
+
+pred.DF <- data.frame(pred.RF,pred.BT,classe=testDataDef$classe)
+fit.ST <- train(classe ~ . , data=pred.DF, method="rf")
+```
+
+### 5 Model Evaluation and Selection
+To establish the expected out-of-sample errors, all three models are tested on the validation set (that has been left untouched until now).
+
+```{r warning=FALSE, message=FALSE}
+pred.val.RF <- predict(fit.RF,validationDataDef)
+pred.val.BT <- predict(fit.BT,validationDataDef)
+pred.val.ST <- predict(fit.ST,validationDataDef)
+
+acc.RF <- confusionMatrix(pred.RF,
+                          validationDataDef$classe)$overall[1]
+acc.BT <- confusionMatrix(pred.BT,
+                          validationDataDef$classe)$overall[1]
+acc.ST <- confusionMatrix(pred.val.ST,
+                          validationDataDef$classe)$overall[1]
+
+accuracy <- data.frame(Model=c("Random Forest",
+                               "Boosted Trees","Stacked"),
+                       Accuracy=c(acc.RF,acc.BT,acc.ST))
+print(accuracy,right=FALSE)
+```
+
+As the accuracy of the Random Forrest is the same as the Stacked Model, the simpler model (Random Forest) is preferred and will be used in the final test.
+
+### 6 Final Test
+The final test is done on the twenty rows of the given testing data frame.
+
+```{r, warning=FALSE, message=FALSE}
+predict(fit.RF,final.testing)
+```
